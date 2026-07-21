@@ -1,0 +1,9 @@
+.git
+.gitignore
+.env
+data/*
+!data/.gitkeep
+bin/
+coverage.out
+outputs/
+work/

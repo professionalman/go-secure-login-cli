@@ -1,0 +1,12 @@
+.env
+data/*
+!data/.gitkeep
+bin/
+auth-cli
+auth-cli.exe
+coverage.out
+*.test
+.idea/
+.vscode/
+/outputs/
+/work/
