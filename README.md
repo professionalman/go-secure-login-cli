@@ -4,11 +4,16 @@ A containerized, interactive authentication application written in Go. The compl
 
 ## Current milestone
 
-Milestone 3 provides registration, password authentication, and persistent sessions:
+Milestone 4 provides registration, password authentication, persistent sessions, and temporary account lockout:
 
 - normalized unique usernames and bcrypt password hashes
 - generic failures for unknown usernames and wrong passwords
 - a fixed dummy bcrypt comparison for unknown-user attempts
+- configurable failed-login thresholds and lock durations
+- persisted failure counts and `locked_until` timestamps
+- strict lock expiry: a lock is active only while `locked_until` is later than the current time
+- first-failure behavior after lock expiry, starting again from one
+- failure-state reset only after complete authentication
 - 32-byte random session tokens encoded as unpadded Base64URL
 - SHA-256 session-token hashes in SQLite; raw tokens remain process-local
 - atomic session creation, login-security reset, and `last_login_at` update
@@ -17,7 +22,7 @@ Milestone 3 provides registration, password authentication, and persistent sessi
 - state-aware commands and completion for logged-out and logged-in users
 - hidden credential prompts and command-name-only history
 
-Account lockout is implemented in Milestone 4. TOTP setup and login are implemented in later milestones.
+TOTP setup and login are implemented in later milestones. The lockout service is structured so wrong TOTP codes can share the same failure counter when that flow is added.
 
 ## Configuration
 
@@ -31,6 +36,15 @@ openssl rand -base64 32
 Place the generated value in `TOTP_ENCRYPTION_KEY_BASE64`. The application refuses to start with a missing, malformed, or incorrectly sized key.
 
 The checked-in `.env.example` uses container paths. For a direct local run, set `DATABASE_PATH=data/auth.db` and `HISTORY_PATH=data/.auth-cli-history` in the process environment.
+
+Account lockout is configured with:
+
+```env
+MAX_LOGIN_ATTEMPTS=5
+ACCOUNT_LOCKOUT_DURATION=15m
+```
+
+Both values must be positive. With the defaults, the fifth consecutive failed password attempt locks the account for 15 minutes. Successful complete authentication resets the counter and lock state.
 
 ## Run with Docker
 
@@ -101,12 +115,16 @@ The application follows this dependency direction:
 Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
 ```
 
-Registration and login rules live in the authentication service. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repository implementations own SQL and timestamp parsing. Handlers own prompts, messages, command authorization, and in-memory CLI state.
+Registration, login, and lockout rules live in the authentication service. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repository implementations own SQL and timestamp parsing. Handlers own prompts, messages, command authorization, and in-memory CLI state.
 
 ## Security notes
 
 - Passwords are read without terminal echo and hashed with bcrypt before persistence.
-- Unknown usernames and wrong passwords produce the same public error; unknown-user attempts still perform bcrypt work.
+- Unknown usernames and wrong passwords produce the same credential error; unknown-user attempts still perform bcrypt work.
+- Known-user password failures share a persistent counter and trigger a temporary lock at the configured threshold.
+- Active locks are checked before password verification and do not accumulate additional failures.
+- Expired locks restart failure counting from zero; complete authentication performs the durable reset.
+- Password success alone will not reset failures once TOTP login is introduced.
 - Raw session tokens are never printed or stored in SQLite. Only lowercase SHA-256 hashes are persisted.
 - Session expiry is absolute, and protected commands query SQLite every time.
 - Logout revokes the database session before clearing the local token.

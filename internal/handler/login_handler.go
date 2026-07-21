@@ -35,6 +35,9 @@ func (h *LoginHandler) Handle(ctx context.Context) error {
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		h.terminal.Println("Invalid username or password.")
 		return nil
+	case errors.Is(err, domain.ErrAccountLocked):
+		h.terminal.Println("Account temporarily locked. Please try again later.")
+		return nil
 	case err != nil:
 		h.terminal.Println("Login failed. Please try again.")
 		return nil

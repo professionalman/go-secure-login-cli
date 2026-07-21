@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"auth-cli/internal/clock"
@@ -41,6 +42,11 @@ type RegistrationPolicy struct {
 	MaximumPasswordLength int
 }
 
+type LoginSecurityPolicy struct {
+	MaximumAttempts int
+	LockoutDuration time.Duration
+}
+
 type AuthOption func(*DefaultAuthService)
 
 func WithSessionService(sessions SessionService) AuthOption {
@@ -49,14 +55,21 @@ func WithSessionService(sessions SessionService) AuthOption {
 	}
 }
 
+func WithLoginSecurityPolicy(policy LoginSecurityPolicy) AuthOption {
+	return func(service *DefaultAuthService) {
+		service.loginSecurity = &policy
+	}
+}
+
 type DefaultAuthService struct {
-	users     repository.UserRepository
-	passwords PasswordHasher
-	verifier  PasswordVerifier
-	sessions  SessionService
-	clock     clock.Clock
-	newID     func() string
-	policy    RegistrationPolicy
+	users         repository.UserRepository
+	passwords     PasswordHasher
+	verifier      PasswordVerifier
+	sessions      SessionService
+	clock         clock.Clock
+	newID         func() string
+	policy        RegistrationPolicy
+	loginSecurity *LoginSecurityPolicy
 }
 
 func NewAuthService(
@@ -138,7 +151,18 @@ func (s *DefaultAuthService) LoginWithPassword(ctx context.Context, input dto.Lo
 	if err != nil {
 		return nil, fmt.Errorf("find login user: %w", err)
 	}
+
+	now := s.clock.Now().UTC()
+	if isLoginLocked(user, now) {
+		return nil, domain.ErrAccountLocked
+	}
 	if err := s.verifier.Verify(user.PasswordHash, input.Password); err != nil {
+		if err := s.recordFailedLogin(ctx, user, now); err != nil {
+			if errors.Is(err, domain.ErrAccountLocked) {
+				return nil, domain.ErrAccountLocked
+			}
+			return nil, fmt.Errorf("record failed login: %w", err)
+		}
 		return nil, domain.ErrInvalidCredentials
 	}
 	if user.TOTPEnabled {
@@ -159,6 +183,35 @@ func (s *DefaultAuthService) LoginWithPassword(ctx context.Context, input dto.Lo
 		SessionExpiresAt:  session.ExpiresAt,
 		PreviousLastLogin: session.PreviousLastLogin,
 	}, nil
+}
+
+func (s *DefaultAuthService) recordFailedLogin(ctx context.Context, user *domain.User, now time.Time) error {
+	if s.loginSecurity == nil {
+		return nil
+	}
+
+	failedAttempts := user.FailedLoginAttempts
+	if user.LockedUntil != nil && !user.LockedUntil.After(now) {
+		failedAttempts = 0
+	}
+	failedAttempts++
+
+	var lockedUntil *time.Time
+	if failedAttempts >= s.loginSecurity.MaximumAttempts {
+		deadline := now.Add(s.loginSecurity.LockoutDuration)
+		lockedUntil = &deadline
+	}
+	if err := s.users.UpdateLoginFailureState(ctx, user.ID, failedAttempts, lockedUntil, now); err != nil {
+		return err
+	}
+	if lockedUntil != nil {
+		return domain.ErrAccountLocked
+	}
+	return nil
+}
+
+func isLoginLocked(user *domain.User, now time.Time) bool {
+	return user.LockedUntil != nil && user.LockedUntil.After(now)
 }
 
 func (s *DefaultAuthService) validUsername(username string) bool {

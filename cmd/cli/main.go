@@ -64,6 +64,10 @@ func run(ctx context.Context) error {
 			MaximumPasswordLength: cfg.MaximumPasswordLength,
 		},
 		service.WithSessionService(sessionService),
+		service.WithLoginSecurityPolicy(service.LoginSecurityPolicy{
+			MaximumAttempts: cfg.MaximumLoginAttempts,
+			LockoutDuration: cfg.AccountLockoutDuration,
+		}),
 	)
 
 	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService)

@@ -71,6 +71,32 @@ func (r *SQLiteUserRepository) FindByID(ctx context.Context, userID string) (*do
 	return scanUser(r.db.QueryRowContext(ctx, userSelect+" WHERE id = ?", userID))
 }
 
+func (r *SQLiteUserRepository) UpdateLoginFailureState(
+	ctx context.Context,
+	userID string,
+	failedAttempts int,
+	lockedUntil *time.Time,
+	updatedAt time.Time,
+) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET failed_login_attempts = ?,
+		    locked_until = ?,
+		    updated_at = ?
+		WHERE id = ?`, failedAttempts, nullableTime(lockedUntil), formatTime(updatedAt), userID)
+	if err != nil {
+		return fmt.Errorf("update user login failure state: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated login failure count: %w", err)
+	}
+	if rows == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func (r *SQLiteUserRepository) ResetLoginSecurity(ctx context.Context, userID string, lastLoginAt time.Time) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE users
