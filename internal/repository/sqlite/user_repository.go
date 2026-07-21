@@ -118,6 +118,26 @@ func (r *SQLiteUserRepository) ResetLoginSecurity(ctx context.Context, userID st
 	return nil
 }
 
+func (r *SQLiteUserRepository) EnableTOTP(ctx context.Context, userID, encryptedSecret string, updatedAt time.Time) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET totp_enabled = 1,
+		    totp_secret_encrypted = ?,
+		    updated_at = ?
+		WHERE id = ? AND totp_enabled = 0`, encryptedSecret, formatTime(updatedAt), userID)
+	if err != nil {
+		return fmt.Errorf("enable user TOTP: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read enabled TOTP user count: %w", err)
+	}
+	if rows == 0 {
+		return repository.ErrConflict
+	}
+	return nil
+}
+
 const userSelect = `
 	SELECT id, username, password_hash, totp_enabled, totp_secret_encrypted,
 	       failed_login_attempts, locked_until, registered_at, last_login_at,

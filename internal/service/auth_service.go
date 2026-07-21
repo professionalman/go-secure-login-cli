@@ -62,14 +62,15 @@ func WithLoginSecurityPolicy(policy LoginSecurityPolicy) AuthOption {
 }
 
 type DefaultAuthService struct {
-	users         repository.UserRepository
-	passwords     PasswordHasher
-	verifier      PasswordVerifier
-	sessions      SessionService
-	clock         clock.Clock
-	newID         func() string
-	policy        RegistrationPolicy
-	loginSecurity *LoginSecurityPolicy
+	users          repository.UserRepository
+	passwords      PasswordHasher
+	verifier       PasswordVerifier
+	sessions       SessionService
+	clock          clock.Clock
+	newID          func() string
+	policy         RegistrationPolicy
+	loginSecurity  *LoginSecurityPolicy
+	totpEnrollment *totpEnrollmentDependencies
 }
 
 func NewAuthService(

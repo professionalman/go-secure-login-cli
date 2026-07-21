@@ -16,13 +16,15 @@ import (
 
 // Shell is the long-running interactive command loop.
 type Shell struct {
-	line     *readline.Instance
-	state    *State
-	out      io.Writer
-	register *handler.RegisterHandler
-	login    *handler.LoginHandler
-	whoami   *handler.WhoAmIHandler
-	logout   *handler.LogoutHandler
+	line       *readline.Instance
+	state      *State
+	out        io.Writer
+	register   *handler.RegisterHandler
+	login      *handler.LoginHandler
+	whoami     *handler.WhoAmIHandler
+	logout     *handler.LogoutHandler
+	enableTOTP *handler.EnableTOTPHandler
+	enrollment service.TOTPEnrollmentService
 }
 
 func NewShell(
@@ -31,6 +33,7 @@ func NewShell(
 	auth service.AuthService,
 	login service.LoginService,
 	sessions service.SessionService,
+	enrollment service.TOTPEnrollmentService,
 ) (*Shell, error) {
 	if err := prepareHistory(historyPath); err != nil {
 		return nil, err
@@ -52,15 +55,17 @@ func NewShell(
 	}
 	terminal := terminal{line: line, out: output}
 	return &Shell{
-		line: line, state: state, out: output,
-		register: handler.NewRegisterHandler(auth, terminal),
-		login:    handler.NewLoginHandler(login, state, terminal),
-		whoami:   handler.NewWhoAmIHandler(sessions, state, terminal),
-		logout:   handler.NewLogoutHandler(sessions, state, terminal),
+		line: line, state: state, out: output, enrollment: enrollment,
+		register:   handler.NewRegisterHandler(auth, terminal),
+		login:      handler.NewLoginHandler(login, state, terminal),
+		whoami:     handler.NewWhoAmIHandler(sessions, state, terminal),
+		logout:     handler.NewLogoutHandler(sessions, state, terminal),
+		enableTOTP: handler.NewEnableTOTPHandler(enrollment, state, terminal, handler.TerminalQRRenderer{Writer: output}),
 	}, nil
 }
 
 func (s *Shell) Close() error {
+	s.enrollment.ClearPendingTOTPSetups()
 	return s.line.Close()
 }
 
@@ -135,8 +140,16 @@ func (s *Shell) Run(ctx context.Context) error {
 			s.whoami.Handle(ctx)
 		case "logout":
 			s.logout.Handle(ctx)
-		case "enable-2fa", "disable-2fa":
-			fmt.Fprintln(s.out, "This command is not available until its two-factor authentication milestone.")
+		case "enable-2fa":
+			if err := s.enableTOTP.Handle(ctx); err != nil {
+				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
+					fmt.Fprintln(s.out, "Two-factor setup cancelled.")
+					continue
+				}
+				return fmt.Errorf("enable-2fa command: %w", err)
+			}
+		case "disable-2fa":
+			fmt.Fprintln(s.out, "This command is not available until the secure TOTP disable milestone.")
 		}
 	}
 }

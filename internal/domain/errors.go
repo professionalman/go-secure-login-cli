@@ -12,6 +12,8 @@ var (
 	ErrInvalidTOTP        = errors.New("invalid TOTP")
 	ErrTOTPAlreadyEnabled = errors.New("TOTP already enabled")
 	ErrTOTPNotEnabled     = errors.New("TOTP not enabled")
+	ErrTOTPSetupNotFound  = errors.New("TOTP setup not found")
+	ErrTOTPSetupExpired   = errors.New("TOTP setup expired")
 	ErrSessionExpired     = errors.New("session expired")
 	ErrSessionRevoked     = errors.New("session revoked")
 	ErrUnauthorized       = errors.New("authentication required")

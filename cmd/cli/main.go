@@ -52,6 +52,16 @@ func run(ctx context.Context) error {
 		security.GenerateSessionToken,
 		cfg.SessionTimeout,
 	)
+	totpCipher, err := security.NewAESGCMCipher(cfg.TOTPEncryptionKey)
+	if err != nil {
+		return fmt.Errorf("TOTP encryption initialization failed: %w", err)
+	}
+	totpService := service.NewTOTPService(serviceClock, service.TOTPPolicy{
+		Issuer: cfg.TOTPIssuer,
+		Period: uint(cfg.TOTPPeriod),
+		Skew:   uint(cfg.TOTPSkew),
+		Digits: cfg.TOTPDigits,
+	})
 	auth := service.NewAuthService(
 		users,
 		security.BcryptPasswordHasher{Cost: cfg.BcryptCost},
@@ -68,9 +78,10 @@ func run(ctx context.Context) error {
 			MaximumAttempts: cfg.MaximumLoginAttempts,
 			LockoutDuration: cfg.AccountLockoutDuration,
 		}),
+		service.WithTOTPEnrollment(totpService, totpCipher, cfg.TOTPSetupTimeout),
 	)
 
-	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService)
+	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService, auth)
 	if err != nil {
 		return fmt.Errorf("CLI initialization failed: %w", err)
 	}

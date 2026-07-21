@@ -14,4 +14,5 @@ type UserRepository interface {
 	FindByID(ctx context.Context, userID string) (*domain.User, error)
 	UpdateLoginFailureState(ctx context.Context, userID string, failedAttempts int, lockedUntil *time.Time, updatedAt time.Time) error
 	ResetLoginSecurity(ctx context.Context, userID string, lastLoginAt time.Time) error
+	EnableTOTP(ctx context.Context, userID, encryptedSecret string, updatedAt time.Time) error
 }
