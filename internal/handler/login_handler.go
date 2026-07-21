@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"auth-cli/internal/domain"
@@ -41,14 +42,64 @@ func (h *LoginHandler) Handle(ctx context.Context) error {
 	case err != nil:
 		h.terminal.Println("Login failed. Please try again.")
 		return nil
-	case result.Status == dto.LoginStatusTOTPRequired:
-		h.terminal.Println("Two-factor login is not available until its milestone is implemented.")
+	case result == nil:
+		h.terminal.Println("Login failed. Please try again.")
 		return nil
+	case result.Status == dto.LoginStatusTOTPRequired:
+		return h.completeTOTPLogin(ctx, result)
 	case result.Status != dto.LoginStatusAuthenticated:
 		h.terminal.Println("Login failed. Please try again.")
 		return nil
 	}
 
+	h.acceptLogin(result)
+	return nil
+}
+
+func (h *LoginHandler) completeTOTPLogin(ctx context.Context, challenge *dto.LoginResult) error {
+	if challenge.ChallengeID == "" {
+		h.terminal.Println("Login failed. Please try again.")
+		return nil
+	}
+	h.terminal.Println("Password accepted. Enter your authenticator code to finish login.")
+	for {
+		code, err := h.terminal.PromptSecret("Authenticator code (blank to cancel): ")
+		if err != nil {
+			h.auth.CancelTOTPLogin(challenge.ChallengeID)
+			return fmt.Errorf("read TOTP login code: %w", err)
+		}
+		if strings.TrimSpace(code) == "" {
+			h.auth.CancelTOTPLogin(challenge.ChallengeID)
+			h.terminal.Println("Login cancelled.")
+			return nil
+		}
+
+		result, err := h.auth.CompleteTOTPLogin(ctx, challenge.ChallengeID, code)
+		switch {
+		case err == nil && result != nil && result.Status == dto.LoginStatusAuthenticated:
+			h.acceptLogin(result)
+			return nil
+		case errors.Is(err, domain.ErrInvalidTOTP):
+			h.terminal.Println("Invalid authenticator code. Try again or press Enter to cancel.")
+			continue
+		case errors.Is(err, domain.ErrAccountLocked):
+			h.terminal.Println("Account temporarily locked. Please try again later.")
+			return nil
+		case errors.Is(err, domain.ErrTOTPChallengeExpired), errors.Is(err, domain.ErrTOTPChallengeNotFound):
+			h.terminal.Println("Two-factor login challenge expired. Run `login` again.")
+			return nil
+		case errors.Is(err, domain.ErrTOTPNotEnabled):
+			h.terminal.Println("Two-factor authentication settings changed. Run `login` again.")
+			return nil
+		default:
+			h.auth.CancelTOTPLogin(challenge.ChallengeID)
+			h.terminal.Println("Login failed. Please try again.")
+			return nil
+		}
+	}
+}
+
+func (h *LoginHandler) acceptLogin(result *dto.LoginResult) {
 	h.state.SetSession(result.RawSessionToken)
 	h.terminal.Println("Login successful.")
 	printUserDetails(h.terminal, result.User, result.SessionExpiresAt)
@@ -57,7 +108,6 @@ func (h *LoginHandler) Handle(ctx context.Context) error {
 	} else {
 		h.terminal.Println("Previous login: " + result.PreviousLastLogin.UTC().Format(time.RFC3339))
 	}
-	return nil
 }
 
 func printUserDetails(terminal Terminal, user dto.User, expiresAt time.Time) {

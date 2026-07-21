@@ -23,9 +23,11 @@ const (
 )
 
 type LoginResult struct {
-	Status            LoginStatus
-	User              User
-	RawSessionToken   string
-	SessionExpiresAt  time.Time
-	PreviousLastLogin *time.Time
+	Status             LoginStatus
+	User               User
+	RawSessionToken    string
+	SessionExpiresAt   time.Time
+	PreviousLastLogin  *time.Time
+	ChallengeID        string
+	ChallengeExpiresAt time.Time
 }

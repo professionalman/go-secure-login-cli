@@ -16,15 +16,17 @@ import (
 
 // Shell is the long-running interactive command loop.
 type Shell struct {
-	line       *readline.Instance
-	state      *State
-	out        io.Writer
-	register   *handler.RegisterHandler
-	login      *handler.LoginHandler
-	whoami     *handler.WhoAmIHandler
-	logout     *handler.LogoutHandler
-	enableTOTP *handler.EnableTOTPHandler
-	enrollment service.TOTPEnrollmentService
+	line         *readline.Instance
+	state        *State
+	out          io.Writer
+	register     *handler.RegisterHandler
+	login        *handler.LoginHandler
+	whoami       *handler.WhoAmIHandler
+	logout       *handler.LogoutHandler
+	enableTOTP   *handler.EnableTOTPHandler
+	disableTOTP  *handler.DisableTOTPHandler
+	loginService service.LoginService
+	enrollment   service.TOTPEnrollmentService
 }
 
 func NewShell(
@@ -34,6 +36,7 @@ func NewShell(
 	login service.LoginService,
 	sessions service.SessionService,
 	enrollment service.TOTPEnrollmentService,
+	disable service.TOTPDisableService,
 ) (*Shell, error) {
 	if err := prepareHistory(historyPath); err != nil {
 		return nil, err
@@ -55,17 +58,19 @@ func NewShell(
 	}
 	terminal := terminal{line: line, out: output}
 	return &Shell{
-		line: line, state: state, out: output, enrollment: enrollment,
-		register:   handler.NewRegisterHandler(auth, terminal),
-		login:      handler.NewLoginHandler(login, state, terminal),
-		whoami:     handler.NewWhoAmIHandler(sessions, state, terminal),
-		logout:     handler.NewLogoutHandler(sessions, state, terminal),
-		enableTOTP: handler.NewEnableTOTPHandler(enrollment, state, terminal, handler.TerminalQRRenderer{Writer: output}),
+		line: line, state: state, out: output, loginService: login, enrollment: enrollment,
+		register:    handler.NewRegisterHandler(auth, terminal),
+		login:       handler.NewLoginHandler(login, state, terminal),
+		whoami:      handler.NewWhoAmIHandler(sessions, state, terminal),
+		logout:      handler.NewLogoutHandler(sessions, state, terminal),
+		enableTOTP:  handler.NewEnableTOTPHandler(enrollment, state, terminal, handler.TerminalQRRenderer{Writer: output}),
+		disableTOTP: handler.NewDisableTOTPHandler(disable, state, terminal),
 	}, nil
 }
 
 func (s *Shell) Close() error {
 	s.enrollment.ClearPendingTOTPSetups()
+	s.loginService.ClearTOTPLoginChallenges()
 	return s.line.Close()
 }
 
@@ -149,7 +154,13 @@ func (s *Shell) Run(ctx context.Context) error {
 				return fmt.Errorf("enable-2fa command: %w", err)
 			}
 		case "disable-2fa":
-			fmt.Fprintln(s.out, "This command is not available until the secure TOTP disable milestone.")
+			if err := s.disableTOTP.Handle(ctx); err != nil {
+				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
+					fmt.Fprintln(s.out, "Disable two-factor authentication cancelled.")
+					continue
+				}
+				return fmt.Errorf("disable-2fa command: %w", err)
+			}
 		}
 	}
 }
@@ -170,7 +181,7 @@ func commandDescription(command string) string {
 	case "register":
 		return "Create a user account."
 	case "login":
-		return "Authenticate with a username and password."
+		return "Authenticate with a username, password, and TOTP when enabled."
 	case "whoami":
 		return "Display the authenticated user."
 	case "enable-2fa":

@@ -25,6 +25,9 @@ type AuthService interface {
 
 type LoginService interface {
 	LoginWithPassword(ctx context.Context, input dto.LoginInput) (*dto.LoginResult, error)
+	CompleteTOTPLogin(ctx context.Context, challengeID, code string) (*dto.LoginResult, error)
+	CancelTOTPLogin(challengeID string)
+	ClearTOTPLoginChallenges()
 }
 
 type PasswordHasher interface {
@@ -71,6 +74,7 @@ type DefaultAuthService struct {
 	policy         RegistrationPolicy
 	loginSecurity  *LoginSecurityPolicy
 	totpEnrollment *totpEnrollmentDependencies
+	totpLogin      *totpLoginDependencies
 }
 
 func NewAuthService(
@@ -167,8 +171,7 @@ func (s *DefaultAuthService) LoginWithPassword(ctx context.Context, input dto.Lo
 		return nil, domain.ErrInvalidCredentials
 	}
 	if user.TOTPEnabled {
-		// Challenge creation and TOTP completion are implemented in Milestone 6.
-		return &dto.LoginResult{Status: dto.LoginStatusTOTPRequired}, nil
+		return s.beginTOTPLogin(user.ID, now)
 	}
 	if s.sessions == nil {
 		return nil, fmt.Errorf("session service is not configured")
@@ -177,13 +180,17 @@ func (s *DefaultAuthService) LoginWithPassword(ctx context.Context, input dto.Lo
 	if err != nil {
 		return nil, fmt.Errorf("finalize password login: %w", err)
 	}
+	return authenticatedLoginResult(session), nil
+}
+
+func authenticatedLoginResult(session *dto.SessionResult) *dto.LoginResult {
 	return &dto.LoginResult{
 		Status:            dto.LoginStatusAuthenticated,
 		User:              session.User,
 		RawSessionToken:   session.RawToken,
 		SessionExpiresAt:  session.ExpiresAt,
 		PreviousLastLogin: session.PreviousLastLogin,
-	}, nil
+	}
 }
 
 func (s *DefaultAuthService) recordFailedLogin(ctx context.Context, user *domain.User, now time.Time) error {

@@ -102,14 +102,26 @@ func TestLoginWithPasswordDoesNotCreateSessionForTOTPUser(t *testing.T) {
 		"alice": {ID: "user-1", Username: "alice", PasswordHash: "hashed:password", TOTPEnabled: true, RegisteredAt: now},
 	}}
 	sessions := &fakeLoginSessions{result: &dto.SessionResult{RawToken: "must-not-be-used"}}
-	auth := NewAuthService(repo, fakeHasher{}, fakeClock{now: now}, func() string { return "id" }, RegistrationPolicy{}, WithSessionService(sessions))
+	auth := NewAuthService(
+		repo, fakeHasher{}, fakeClock{now: now}, func() string { return "id" }, RegistrationPolicy{},
+		WithSessionService(sessions), testTOTPLoginOption(5*time.Minute),
+	)
 	result, err := auth.LoginWithPassword(context.Background(), dto.LoginInput{Username: "alice", Password: "password"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != dto.LoginStatusTOTPRequired || sessions.userID != "" {
+	if result.Status != dto.LoginStatusTOTPRequired || result.ChallengeID != "challenge" || sessions.userID != "" {
 		t.Errorf("result/session user = %#v/%q", result, sessions.userID)
 	}
+	if !result.ChallengeExpiresAt.Equal(now.Add(5 * time.Minute)) {
+		t.Errorf("challenge expiry = %v", result.ChallengeExpiresAt)
+	}
+}
+
+func testTOTPLoginOption(timeout time.Duration) AuthOption {
+	return WithTOTPLogin(nil, nil, timeout, func() (string, string, error) {
+		return "challenge", "unused-hash", nil
+	})
 }
 
 var _ repository.UserRepository = (*fakeUserRepository)(nil)

@@ -2,55 +2,47 @@ package sqlite
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"auth-cli/internal/database"
-	"auth-cli/internal/domain"
+	"auth-cli/internal/repository"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestUserRepositoryUpdatesLoginFailureState(t *testing.T) {
+const updateLoginFailureSQL = `
+		UPDATE users
+		SET failed_login_attempts = ?,
+		    locked_until = ?,
+		    updated_at = ?
+		WHERE id = ?`
+
+func TestUserRepositoryUpdatesLoginFailureStateWithSQLMock(t *testing.T) {
 	ctx := context.Background()
-	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "auth.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := database.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
-	now := time.Date(2026, time.July, 21, 22, 0, 0, 123, time.UTC)
+	db, mock := newRepositoryMock(t)
 	repo := NewUserRepository(db)
-	if err := repo.Create(ctx, &domain.User{
-		ID: "u", Username: "alice", PasswordHash: "hash",
-		RegisteredAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
+	now := time.Date(2026, time.July, 21, 22, 0, 0, 123, time.UTC)
 	lockedUntil := now.Add(15 * time.Minute)
+
+	mock.ExpectExec(updateLoginFailureSQL).
+		WithArgs(5, formatTime(lockedUntil), formatTime(now), "u").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.UpdateLoginFailureState(ctx, "u", 5, &lockedUntil, now); err != nil {
 		t.Fatal(err)
 	}
-	user, err := repo.FindByID(ctx, "u")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.FailedLoginAttempts != 5 || user.LockedUntil == nil || !user.LockedUntil.Equal(lockedUntil) || !user.UpdatedAt.Equal(now) {
-		t.Fatalf("persisted lockout state = %#v", user)
-	}
 
 	afterExpiry := lockedUntil.Add(time.Nanosecond)
+	mock.ExpectExec(updateLoginFailureSQL).
+		WithArgs(1, nil, formatTime(afterExpiry), "u").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.UpdateLoginFailureState(ctx, "u", 1, nil, afterExpiry); err != nil {
 		t.Fatal(err)
 	}
-	user, err = repo.FindByID(ctx, "u")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.FailedLoginAttempts != 1 || user.LockedUntil != nil || !user.UpdatedAt.Equal(afterExpiry) {
-		t.Fatalf("persisted post-expiry state = %#v", user)
+
+	mock.ExpectExec(updateLoginFailureSQL).
+		WithArgs(1, nil, formatTime(afterExpiry), "missing").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	if err := repo.UpdateLoginFailureState(ctx, "missing", 1, nil, afterExpiry); err != repository.ErrNotFound {
+		t.Fatalf("missing user error = %v", err)
 	}
 }

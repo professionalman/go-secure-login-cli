@@ -15,4 +15,5 @@ type UserRepository interface {
 	UpdateLoginFailureState(ctx context.Context, userID string, failedAttempts int, lockedUntil *time.Time, updatedAt time.Time) error
 	ResetLoginSecurity(ctx context.Context, userID string, lastLoginAt time.Time) error
 	EnableTOTP(ctx context.Context, userID, encryptedSecret string, updatedAt time.Time) error
+	DisableTOTP(ctx context.Context, userID string, updatedAt time.Time) error
 }

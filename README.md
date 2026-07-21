@@ -1,24 +1,23 @@
 # Authentication CLI
 
-A containerized, interactive authentication application written in Go. The completed application will support registration, password login, optional TOTP two-factor authentication, account lockout, and database-backed sessions stored in SQLite.
+A containerized, interactive authentication application written in Go. It supports registration, password login, optional TOTP two-factor authentication, temporary account lockout, and database-backed sessions stored in SQLite.
 
 ## Current milestone
 
-Milestone 5 provides confirmed TOTP enrollment in addition to registration, password login, temporary lockout, and persistent sessions:
+Milestone 6 completes the authentication lifecycle:
 
-- TOTP provisioning with configurable issuer, period, skew, and six- or eight-digit codes
-- compact terminal QR rendering and explicit provisioning URI output
-- process-local pending enrollment that expires after the configured timeout
-- confirmation with a valid current authenticator code before persistence
-- AES-256-GCM encryption with a new nonce for every stored TOTP secret
-- cancellation on blank input or interrupted prompts
-- pending-state replacement, expiry, success, cancellation, and shutdown cleanup
-- persistent failed-login thresholds and temporary account locks
-- random database-backed sessions whose raw tokens remain process-local
+- secure registration and normalized usernames
+- password login with generic credential errors and dummy-hash work for unknown users
+- persistent failed-login thresholds shared by password and TOTP login failures
+- temporary account lockout with precise expiry behavior
+- random, database-backed sessions with absolute expiry
+- confirmed TOTP enrollment with terminal QR and provisioning URI output
+- AES-256-GCM encryption of stored TOTP secrets
+- opaque, process-local TOTP login challenges that expire after the configured timeout
+- password-and-TOTP reauthentication before disabling 2FA
+- atomic clearing of the enabled flag and encrypted TOTP secret
 
-TOTP login and the secure `disable-2fa` flow are implemented in Milestone 6. Existing sessions remain valid after enrollment.
-
-> **Milestone 5 limitation:** after enabling 2FA and logging out, that account cannot complete a new login until Milestone 6 is implemented. Use a disposable test account or keep the current session active when evaluating enrollment.
+Pending enrollment and login challenge state is process-local and cleared on cancellation, success, expiry, or application shutdown. Enabling or disabling 2FA does not revoke existing sessions.
 
 ## Configuration
 
@@ -45,6 +44,7 @@ TOTP_PERIOD=30
 TOTP_SKEW=1
 TOTP_DIGITS=6
 TOTP_SETUP_TIMEOUT=10m
+TOTP_CHALLENGE_TIMEOUT=5m
 TOTP_ENCRYPTION_KEY_BASE64=replace-with-base64-encoded-32-byte-key
 ```
 
@@ -91,7 +91,9 @@ To enroll an authenticated account in TOTP:
 3. Enter the current authenticator code at the hidden prompt.
 4. Retry an invalid code, or press Enter/Ctrl+C to cancel.
 
-The provisioning URI contains the TOTP secret and is displayed intentionally. It is never written to command history or application logs.
+The provisioning URI contains the TOTP secret and is displayed intentionally. It is never written to command history or application logs. Subsequent logins first verify the password and then prompt for a current authenticator code. The password step creates only an opaque, five-minute in-memory challenge; no session exists until the code succeeds.
+
+To disable TOTP, run `disable-2fa` while logged in and enter the current password and authenticator code at the hidden prompts. Failed disable reauthentication does not affect login-lockout counters, and a successful disable leaves the current session valid.
 
 Commands available while logged out:
 
@@ -102,10 +104,10 @@ Commands available while logged out:
 
 Commands available while logged in:
 
-- `whoami` — validate the current database session and display account details
-- `enable-2fa` — start and confirm TOTP enrollment
-- `logout` — revoke the current session and clear local authentication state
-- `disable-2fa` — reserved for Milestone 6
+- `whoami` - validate the current database session and display account details
+- `enable-2fa` - start and confirm TOTP enrollment
+- `disable-2fa` - disable TOTP after password and code reauthentication
+- `logout` - revoke the current session and clear local authentication state
 - `help`
 - `exit`
 
@@ -129,21 +131,23 @@ The application follows this dependency direction:
 Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
 ```
 
-The authentication service owns enrollment state and confirmation rules. A clock-injected TOTP service owns provisioning and code validation. AES-GCM is isolated behind an encryption dependency. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repositories own SQL and timestamp parsing; handlers own prompts, QR output, messages, command authorization, and in-memory CLI state.
+Authentication services own validation, lockout, TOTP enrollment, opaque login challenges, disable reauthentication, and login orchestration. A clock-injected TOTP service owns provisioning and code validation. AES-GCM is isolated behind an encryption dependency. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repositories own SQL and timestamp parsing; handlers own prompts, QR output, messages, command authorization, and in-memory CLI state.
 
 ## Security notes
 
-- TOTP secrets are persisted only after a correct confirmation code.
+- TOTP secrets are persisted only after a correct enrollment confirmation code.
 - Stored TOTP secrets use AES-256-GCM with a fresh nonce and Base64 `nonce || ciphertext` encoding.
-- Pending plaintext TOTP secrets exist only in process memory, expire after ten minutes by default, and are cleared on replacement, success, cancellation, or shutdown.
-- The provisioning URI contains the secret, so it is displayed only during the interactive setup flow.
+- Pending plaintext enrollment secrets exist only in process memory and expire after ten minutes by default.
+- TOTP login challenges contain only a user ID and expiry, are opaque to handlers, are single-use on success, and expire after five minutes by default.
 - Passwords and TOTP codes are read without terminal echo.
 - Passwords are hashed with bcrypt before persistence.
 - Unknown usernames and wrong passwords produce the same credential error; unknown-user attempts still perform bcrypt work.
-- Known-user password failures share a persistent counter and trigger a temporary lock at the configured threshold.
+- Wrong passwords and wrong login TOTP codes share one persistent failure counter and lock threshold.
+- Login failures reset only after all required factors succeed and the session transaction commits.
+- Disable-flow reauthentication failures do not modify login-lockout counters.
 - Raw session tokens are never printed or stored in SQLite. Only lowercase SHA-256 hashes are persisted.
 - Session expiry is absolute, and protected commands query SQLite every time.
-- Enabling 2FA does not revoke existing sessions.
+- Enabling or disabling 2FA does not revoke existing sessions.
 - Usernames are normalized and protected by a unique database index.
 - Secrets are supplied through environment variables and are never committed.
 - Command history is saved manually and contains recognized command names only.

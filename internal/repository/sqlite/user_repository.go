@@ -9,8 +9,6 @@ import (
 
 	"auth-cli/internal/domain"
 	"auth-cli/internal/repository"
-
-	sqlitedriver "modernc.org/sqlite"
 )
 
 const (
@@ -241,8 +239,12 @@ func boolAsInteger(value bool) int {
 	return 0
 }
 
+type sqliteCodeError interface {
+	Code() int
+}
+
 func isUniqueConstraint(err error) bool {
-	var sqliteErr *sqlitedriver.Error
+	var sqliteErr sqliteCodeError
 	if !errors.As(err, &sqliteErr) {
 		return false
 	}

@@ -79,9 +79,10 @@ func run(ctx context.Context) error {
 			LockoutDuration: cfg.AccountLockoutDuration,
 		}),
 		service.WithTOTPEnrollment(totpService, totpCipher, cfg.TOTPSetupTimeout),
+		service.WithTOTPLogin(totpService, totpCipher, cfg.TOTPChallengeTimeout, security.GenerateSessionToken),
 	)
 
-	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService, auth)
+	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService, auth, auth)
 	if err != nil {
 		return fmt.Errorf("CLI initialization failed: %w", err)
 	}

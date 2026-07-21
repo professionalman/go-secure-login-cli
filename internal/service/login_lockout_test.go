@@ -123,8 +123,8 @@ func TestPasswordSuccessRetainsFailuresUntilTOTPCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != dto.LoginStatusTOTPRequired {
-		t.Fatalf("status = %q, want %q", result.Status, dto.LoginStatusTOTPRequired)
+	if result.Status != dto.LoginStatusTOTPRequired || result.ChallengeID == "" {
+		t.Fatalf("result = %#v, want TOTP challenge", result)
 	}
 	if user.FailedLoginAttempts != 4 || user.LockedUntil != nil {
 		t.Fatalf("password step reset login security: %d/%v", user.FailedLoginAttempts, user.LockedUntil)
@@ -139,5 +139,6 @@ func newLockoutTestAuth(users repository.UserRepository, passwords PasswordHashe
 		func() string { return "id" },
 		RegistrationPolicy{},
 		WithLoginSecurityPolicy(LoginSecurityPolicy{MaximumAttempts: 5, LockoutDuration: 15 * time.Minute}),
+		testTOTPLoginOption(5*time.Minute),
 	)
 }
