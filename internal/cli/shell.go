@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"auth-cli/internal/handler"
@@ -19,15 +20,24 @@ type Shell struct {
 	state    *State
 	out      io.Writer
 	register *handler.RegisterHandler
+	login    *handler.LoginHandler
+	whoami   *handler.WhoAmIHandler
+	logout   *handler.LogoutHandler
 }
 
-func NewShell(historyPath string, output io.Writer, auth service.AuthService) (*Shell, error) {
+func NewShell(
+	historyPath string,
+	output io.Writer,
+	auth service.AuthService,
+	login service.LoginService,
+	sessions service.SessionService,
+) (*Shell, error) {
 	if err := prepareHistory(historyPath); err != nil {
 		return nil, err
 	}
 	state := &State{}
 	line, err := readline.NewEx(&readline.Config{
-		Prompt:                 "auth-cli> ",
+		Prompt:                 shellPrompt,
 		HistoryFile:            historyPath,
 		HistorySearchFold:      true,
 		DisableAutoSaveHistory: true,
@@ -40,8 +50,14 @@ func NewShell(historyPath string, output io.Writer, auth service.AuthService) (*
 	if err != nil {
 		return nil, fmt.Errorf("initialize interactive shell: %w", err)
 	}
-	register := handler.NewRegisterHandler(auth, terminal{line: line, out: output})
-	return &Shell{line: line, state: state, out: output, register: register}, nil
+	terminal := terminal{line: line, out: output}
+	return &Shell{
+		line: line, state: state, out: output,
+		register: handler.NewRegisterHandler(auth, terminal),
+		login:    handler.NewLoginHandler(login, state, terminal),
+		whoami:   handler.NewWhoAmIHandler(sessions, state, terminal),
+		logout:   handler.NewLogoutHandler(sessions, state, terminal),
+	}, nil
 }
 
 func (s *Shell) Close() error {
@@ -78,12 +94,20 @@ func (s *Shell) Run(ctx context.Context) error {
 		}
 
 		command := strings.ToLower(fields[0])
-		if !knownCommand(s.state, command) {
+		if !recognizedCommand(command) {
 			fmt.Fprintln(s.out, "Unknown command. Run `help` to see available commands.")
 			continue
 		}
 		if err := s.line.SaveHistory(command); err != nil {
 			fmt.Fprintln(s.out, "Warning: command history could not be saved.")
+		}
+		if !knownCommand(s.state, command) {
+			if s.state.IsAuthenticated() {
+				fmt.Fprintln(s.out, "You are already logged in. Log out before using this command.")
+			} else {
+				fmt.Fprintln(s.out, "You must log in before using this command.")
+			}
+			continue
 		}
 
 		switch command {
@@ -100,18 +124,31 @@ func (s *Shell) Run(ctx context.Context) error {
 				return fmt.Errorf("register command: %w", err)
 			}
 		case "login":
-			fmt.Fprintln(s.out, "login is not available until Milestone 3 is implemented.")
-		default:
-			fmt.Fprintln(s.out, "This command is not available in the current milestone.")
+			if err := s.login.Handle(ctx); err != nil {
+				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
+					fmt.Fprintln(s.out, "Login cancelled.")
+					continue
+				}
+				return fmt.Errorf("login command: %w", err)
+			}
+		case "whoami":
+			s.whoami.Handle(ctx)
+		case "logout":
+			s.logout.Handle(ctx)
+		case "enable-2fa", "disable-2fa":
+			fmt.Fprintln(s.out, "This command is not available until its two-factor authentication milestone.")
 		}
 	}
+}
+
+func recognizedCommand(command string) bool {
+	return slices.Contains(loggedOutCommands, command) || slices.Contains(loggedInCommands, command)
 }
 
 func (s *Shell) printHelp() {
 	fmt.Fprintln(s.out, "Available commands:")
 	for _, command := range AvailableCommands(s.state) {
-		description := commandDescription(command)
-		fmt.Fprintf(s.out, "  %-12s %s\n", command, description)
+		fmt.Fprintf(s.out, "  %-12s %s\n", command, commandDescription(command))
 	}
 }
 
@@ -120,7 +157,7 @@ func commandDescription(command string) string {
 	case "register":
 		return "Create a user account."
 	case "login":
-		return "Authenticate with a username and password (Milestone 3)."
+		return "Authenticate with a username and password."
 	case "whoami":
 		return "Display the authenticated user."
 	case "enable-2fa":

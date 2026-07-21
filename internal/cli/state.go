@@ -15,6 +15,12 @@ func (s *State) IsAuthenticated() bool {
 	return s.rawSessionToken != ""
 }
 
+func (s *State) SessionToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rawSessionToken
+}
+
 func (s *State) SetSession(rawToken string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -40,10 +40,22 @@ func run(ctx context.Context) error {
 	}
 
 	users := sqliterepository.NewUserRepository(db)
+	sessions := sqliterepository.NewSessionRepository(db)
+	unitOfWork := sqliterepository.NewUnitOfWork(db)
+	serviceClock := clock.System{}
+	sessionService := service.NewSessionService(
+		users,
+		sessions,
+		unitOfWork,
+		serviceClock,
+		uuid.NewString,
+		security.GenerateSessionToken,
+		cfg.SessionTimeout,
+	)
 	auth := service.NewAuthService(
 		users,
 		security.BcryptPasswordHasher{Cost: cfg.BcryptCost},
-		clock.System{},
+		serviceClock,
 		uuid.NewString,
 		service.RegistrationPolicy{
 			MinimumUsernameLength: cfg.MinimumUsernameLength,
@@ -51,9 +63,10 @@ func run(ctx context.Context) error {
 			MinimumPasswordLength: cfg.MinimumPasswordLength,
 			MaximumPasswordLength: cfg.MaximumPasswordLength,
 		},
+		service.WithSessionService(sessionService),
 	)
 
-	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth)
+	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService)
 	if err != nil {
 		return fmt.Errorf("CLI initialization failed: %w", err)
 	}

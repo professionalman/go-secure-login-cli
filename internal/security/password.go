@@ -18,11 +18,15 @@ func VerifyPassword(passwordHash, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 }
 
-// BcryptPasswordHasher adapts the password utility to the service boundary.
+// BcryptPasswordHasher adapts the password utility to service boundaries.
 type BcryptPasswordHasher struct {
 	Cost int
 }
 
 func (h BcryptPasswordHasher) Hash(password string) (string, error) {
 	return HashPassword(password, h.Cost)
+}
+
+func (h BcryptPasswordHasher) Verify(passwordHash, password string) error {
+	return VerifyPassword(passwordHash, password)
 }

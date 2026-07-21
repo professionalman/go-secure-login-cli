@@ -4,19 +4,20 @@ A containerized, interactive authentication application written in Go. The compl
 
 ## Current milestone
 
-Milestone 2 provides the project bootstrap and registration vertical slice:
+Milestone 3 provides registration, password authentication, and persistent sessions:
 
-- validated environment configuration
-- SQLite initialization and idempotent embedded migrations
-- normalized, unique usernames with a documented safe character set
-- hidden password and confirmation prompts
-- configurable password-length validation and bcrypt hashing
-- friendly duplicate and validation errors
-- an interactive shell with `register`, `help`, and `exit`
-- command-only persistent history and logged-out tab completion
-- a non-root multi-stage Docker image and persistent Compose volume
+- normalized unique usernames and bcrypt password hashes
+- generic failures for unknown usernames and wrong passwords
+- a fixed dummy bcrypt comparison for unknown-user attempts
+- 32-byte random session tokens encoded as unpadded Base64URL
+- SHA-256 session-token hashes in SQLite; raw tokens remain process-local
+- atomic session creation, login-security reset, and `last_login_at` update
+- absolute session expiry and database validation on every protected command
+- session revocation on logout
+- state-aware commands and completion for logged-out and logged-in users
+- hidden credential prompts and command-name-only history
 
-`login` is listed by the shell but is intentionally implemented in Milestone 3.
+Account lockout is implemented in Milestone 4. TOTP setup and login are implemented in later milestones.
 
 ## Configuration
 
@@ -63,7 +64,24 @@ $env:HISTORY_PATH = 'data/.auth-cli-history'
 go run ./cmd/cli
 ```
 
-Run `register`, then enter a username, password, and matching password confirmation. Password values are hidden and never added to command history.
+Start with `register`, then use `login`. Successful authentication shows the username, registration date, MFA status, absolute session expiry, and previous login time without displaying the session token.
+
+Commands available while logged out:
+
+- `register`
+- `login`
+- `help`
+- `exit`
+
+Commands available while logged in:
+
+- `whoami` — validate the current database session and display account details
+- `logout` — revoke the current session and clear local authentication state
+- `enable-2fa` and `disable-2fa` — reserved for the TOTP milestones
+- `help`
+- `exit`
+
+Commands accept no arguments. Usernames and passwords are collected through prompts; passwords are hidden.
 
 ## Validation
 
@@ -83,11 +101,15 @@ The application follows this dependency direction:
 Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
 ```
 
-Milestone 2 implements registration across every layer while keeping terminal input, business rules, and SQL in separate packages.
+Registration and login rules live in the authentication service. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repository implementations own SQL and timestamp parsing. Handlers own prompts, messages, command authorization, and in-memory CLI state.
 
 ## Security notes
 
 - Passwords are read without terminal echo and hashed with bcrypt before persistence.
+- Unknown usernames and wrong passwords produce the same public error; unknown-user attempts still perform bcrypt work.
+- Raw session tokens are never printed or stored in SQLite. Only lowercase SHA-256 hashes are persisted.
+- Session expiry is absolute, and protected commands query SQLite every time.
+- Logout revokes the database session before clearing the local token.
 - Usernames are trimmed, lowercased, validated, and protected by a unique database index.
 - Secrets are supplied through environment variables and are never committed.
 - The application validates the future AES-256-GCM key at startup even before TOTP enrollment is implemented.

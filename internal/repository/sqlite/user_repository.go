@@ -24,10 +24,14 @@ type rowScanner interface {
 
 // SQLiteUserRepository persists users with database/sql and SQLite.
 type SQLiteUserRepository struct {
-	db *sql.DB
+	db dbExecutor
 }
 
 func NewUserRepository(db *sql.DB) *SQLiteUserRepository {
+	return newUserRepository(db)
+}
+
+func newUserRepository(db dbExecutor) *SQLiteUserRepository {
 	return &SQLiteUserRepository{db: db}
 }
 
@@ -65,6 +69,27 @@ func (r *SQLiteUserRepository) FindByUsername(ctx context.Context, username stri
 
 func (r *SQLiteUserRepository) FindByID(ctx context.Context, userID string) (*domain.User, error) {
 	return scanUser(r.db.QueryRowContext(ctx, userSelect+" WHERE id = ?", userID))
+}
+
+func (r *SQLiteUserRepository) ResetLoginSecurity(ctx context.Context, userID string, lastLoginAt time.Time) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET failed_login_attempts = 0,
+		    locked_until = NULL,
+		    last_login_at = ?,
+		    updated_at = ?
+		WHERE id = ?`, formatTime(lastLoginAt), formatTime(lastLoginAt), userID)
+	if err != nil {
+		return fmt.Errorf("reset user login security: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read reset user count: %w", err)
+	}
+	if rows == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
 }
 
 const userSelect = `
@@ -147,7 +172,7 @@ func nullableString(value *string) any {
 func parseTime(column, value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse user %s: %w", column, err)
+		return time.Time{}, fmt.Errorf("parse %s: %w", column, err)
 	}
 	return parsed.UTC(), nil
 }
