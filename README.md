@@ -4,16 +4,19 @@ A containerized, interactive authentication application written in Go. The compl
 
 ## Current milestone
 
-Milestone 1 provides the application bootstrap:
+Milestone 2 provides the project bootstrap and registration vertical slice:
 
 - validated environment configuration
 - SQLite initialization and idempotent embedded migrations
-- an interactive shell with `help` and `exit`
-- command-only persistent history
-- logged-out tab completion
+- normalized, unique usernames with a documented safe character set
+- hidden password and confirmation prompts
+- configurable password-length validation and bcrypt hashing
+- friendly duplicate and validation errors
+- an interactive shell with `register`, `help`, and `exit`
+- command-only persistent history and logged-out tab completion
 - a non-root multi-stage Docker image and persistent Compose volume
 
-`register` and `login` are listed by the shell but are intentionally implemented in later milestones.
+`login` is listed by the shell but is intentionally implemented in Milestone 3.
 
 ## Configuration
 
@@ -60,6 +63,8 @@ $env:HISTORY_PATH = 'data/.auth-cli-history'
 go run ./cmd/cli
 ```
 
+Run `register`, then enter a username, password, and matching password confirmation. Password values are hidden and never added to command history.
+
 ## Validation
 
 ```bash
@@ -72,16 +77,18 @@ docker build -t auth-cli:local .
 
 ## Architecture
 
-The completed application follows this dependency direction:
+The application follows this dependency direction:
 
 ```text
 Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
 ```
 
-Milestone 1 establishes configuration, database, migration, and shell packages. Authentication handlers and services are added as vertical slices in later milestones.
+Milestone 2 implements registration across every layer while keeping terminal input, business rules, and SQL in separate packages.
 
 ## Security notes
 
+- Passwords are read without terminal echo and hashed with bcrypt before persistence.
+- Usernames are trimmed, lowercased, validated, and protected by a unique database index.
 - Secrets are supplied through environment variables and are never committed.
 - The application validates the future AES-256-GCM key at startup even before TOTP enrollment is implemented.
 - Command history is saved manually and contains recognized command names only.

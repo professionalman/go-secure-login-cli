@@ -7,17 +7,21 @@ import (
 	"io"
 	"strings"
 
+	"auth-cli/internal/handler"
+	"auth-cli/internal/service"
+
 	"github.com/chzyer/readline"
 )
 
 // Shell is the long-running interactive command loop.
 type Shell struct {
-	line  *readline.Instance
-	state *State
-	out   io.Writer
+	line     *readline.Instance
+	state    *State
+	out      io.Writer
+	register *handler.RegisterHandler
 }
 
-func NewShell(historyPath string, output io.Writer) (*Shell, error) {
+func NewShell(historyPath string, output io.Writer, auth service.AuthService) (*Shell, error) {
 	if err := prepareHistory(historyPath); err != nil {
 		return nil, err
 	}
@@ -36,7 +40,8 @@ func NewShell(historyPath string, output io.Writer) (*Shell, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize interactive shell: %w", err)
 	}
-	return &Shell{line: line, state: state, out: output}, nil
+	register := handler.NewRegisterHandler(auth, terminal{line: line, out: output})
+	return &Shell{line: line, state: state, out: output, register: register}, nil
 }
 
 func (s *Shell) Close() error {
@@ -86,8 +91,16 @@ func (s *Shell) Run(ctx context.Context) error {
 			s.printHelp()
 		case "exit":
 			return nil
-		case "register", "login":
-			fmt.Fprintf(s.out, "%s is not available until its authentication milestone is implemented.\n", command)
+		case "register":
+			if err := s.register.Handle(ctx); err != nil {
+				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
+					fmt.Fprintln(s.out, "Registration cancelled.")
+					continue
+				}
+				return fmt.Errorf("register command: %w", err)
+			}
+		case "login":
+			fmt.Fprintln(s.out, "login is not available until Milestone 3 is implemented.")
 		default:
 			fmt.Fprintln(s.out, "This command is not available in the current milestone.")
 		}
@@ -105,7 +118,7 @@ func (s *Shell) printHelp() {
 func commandDescription(command string) string {
 	switch command {
 	case "register":
-		return "Create a user account (Milestone 2)."
+		return "Create a user account."
 	case "login":
 		return "Authenticate with a username and password (Milestone 3)."
 	case "whoami":

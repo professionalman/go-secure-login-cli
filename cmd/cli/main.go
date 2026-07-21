@@ -6,8 +6,14 @@ import (
 	"os"
 
 	appcli "auth-cli/internal/cli"
+	"auth-cli/internal/clock"
 	"auth-cli/internal/config"
 	"auth-cli/internal/database"
+	sqliterepository "auth-cli/internal/repository/sqlite"
+	"auth-cli/internal/security"
+	"auth-cli/internal/service"
+
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -33,7 +39,21 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("database migration failed: %w", err)
 	}
 
-	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout)
+	users := sqliterepository.NewUserRepository(db)
+	auth := service.NewAuthService(
+		users,
+		security.BcryptPasswordHasher{Cost: cfg.BcryptCost},
+		clock.System{},
+		uuid.NewString,
+		service.RegistrationPolicy{
+			MinimumUsernameLength: cfg.MinimumUsernameLength,
+			MaximumUsernameLength: cfg.MaximumUsernameLength,
+			MinimumPasswordLength: cfg.MinimumPasswordLength,
+			MaximumPasswordLength: cfg.MaximumPasswordLength,
+		},
+	)
+
+	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth)
 	if err != nil {
 		return fmt.Errorf("CLI initialization failed: %w", err)
 	}
