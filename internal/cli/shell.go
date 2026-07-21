@@ -75,6 +75,16 @@ func (s *Shell) Close() error {
 }
 
 func (s *Shell) Run(ctx context.Context) error {
+	readStopped := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.line.Close()
+		case <-readStopped:
+		}
+	}()
+	defer close(readStopped)
+
 	fmt.Fprintln(s.out, "Authentication CLI ready. Run `help` to see available commands.")
 	for {
 		select {
@@ -84,6 +94,9 @@ func (s *Shell) Run(ctx context.Context) error {
 		}
 
 		raw, err := s.line.Readline()
+		if ctx.Err() != nil {
+			return nil
+		}
 		if errors.Is(err, readline.ErrInterrupt) {
 			continue
 		}

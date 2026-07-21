@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	appcli "auth-cli/internal/cli"
 	"auth-cli/internal/clock"
@@ -17,7 +19,9 @@ import (
 )
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "Application startup failed:", err)
 		os.Exit(1)
 	}
@@ -43,6 +47,9 @@ func run(ctx context.Context) error {
 	sessions := sqliterepository.NewSessionRepository(db)
 	unitOfWork := sqliterepository.NewUnitOfWork(db)
 	serviceClock := clock.System{}
+	if err := sessions.DeleteExpired(ctx, serviceClock.Now().UTC()); err != nil {
+		return fmt.Errorf("expired session cleanup failed: %w", err)
+	}
 	sessionService := service.NewSessionService(
 		users,
 		sessions,

@@ -1,79 +1,53 @@
 # Authentication CLI
 
-A containerized, interactive authentication application written in Go. It supports registration, password login, optional TOTP two-factor authentication, temporary account lockout, and database-backed sessions stored in SQLite.
+A containerized Go command-line application for account registration, password login, optional TOTP two-factor authentication, temporary account lockout, and database-backed sessions.
 
-## Current milestone
+The project is intentionally small enough to understand as an internship assignment. It uses a three-layer design, SQLite persistence, standard Go wiring, and focused tests without a web framework or dependency-injection container.
 
-Milestone 6 completes the authentication lifecycle:
+## Features
 
-- secure registration and normalized usernames
-- password login with generic credential errors and dummy-hash work for unknown users
-- persistent failed-login thresholds shared by password and TOTP login failures
-- temporary account lockout with precise expiry behavior
-- random, database-backed sessions with absolute expiry
-- confirmed TOTP enrollment with terminal QR and provisioning URI output
-- AES-256-GCM encryption of stored TOTP secrets
-- opaque, process-local TOTP login challenges that expire after the configured timeout
-- password-and-TOTP reauthentication before disabling 2FA
-- atomic clearing of the enabled flag and encrypted TOTP secret
+- normalized, unique usernames
+- bcrypt password hashing
+- password login with generic credential errors
+- optional TOTP enrollment with a terminal QR code
+- password-first TOTP login challenges
+- temporary account lockout shared across password and login-code failures
+- random session tokens stored in SQLite only as SHA-256 hashes
+- absolute session expiry and revocation on logout
+- secure 2FA disable flow requiring the current password and TOTP code
+- embedded, transactional SQLite migrations
+- state-aware completion and command history containing command names only
+- non-root Docker image and persistent Compose volume
+- graceful Ctrl+C/Ctrl+D, `exit`, and container shutdown handling
 
-Pending enrollment and login challenge state is process-local and cleared on cancellation, success, expiry, or application shutdown. Enabling or disabling 2FA does not revoke existing sessions.
+## Requirements
 
-## Configuration
+Choose either:
 
-Create a local environment file and replace the sample encryption key:
+- Docker 27+ with Docker Compose, or
+- Go 1.26+ for a local run
+
+## Quick start with Docker
+
+Copy the example configuration and generate a 32-byte encryption key:
 
 ```bash
 cp .env.example .env
 openssl rand -base64 32
 ```
 
-Place the generated value in `TOTP_ENCRYPTION_KEY_BASE64`. The application refuses to start with a missing, malformed, or incorrectly sized key. Losing or changing this key makes existing encrypted TOTP secrets unusable.
-
-The checked-in `.env.example` uses container paths. For a direct local run, set `DATABASE_PATH=data/auth.db` and `HISTORY_PATH=data/.auth-cli-history` in the process environment.
-
-Relevant authentication settings include:
-
-```env
-MAX_LOGIN_ATTEMPTS=5
-ACCOUNT_LOCKOUT_DURATION=15m
-SESSION_TIMEOUT=30m
-
-TOTP_ISSUER=InternshipAuthCLI
-TOTP_PERIOD=30
-TOTP_SKEW=1
-TOTP_DIGITS=6
-TOTP_SETUP_TIMEOUT=10m
-TOTP_CHALLENGE_TIMEOUT=5m
-TOTP_ENCRYPTION_KEY_BASE64=replace-with-base64-encoded-32-byte-key
-```
-
-Durations and thresholds must be positive. TOTP digits must be either 6 or 8.
-
-## Run with Docker
+Replace `TOTP_ENCRYPTION_KEY_BASE64` in `.env` with the generated value, then run:
 
 ```bash
 docker compose build
 docker compose run --rm app
 ```
 
-The `auth_data` named volume preserves the database and command history between runs.
+The first start creates `/app/data/auth.db`, applies migrations, and removes expired sessions. Run `help` inside the CLI to see commands available in the current login state.
 
-To stop the Compose project without deleting data:
+## Local run
 
-```bash
-docker compose down
-```
-
-To permanently delete the SQLite database and history:
-
-```bash
-docker compose down -v
-```
-
-## Run locally
-
-Set the required key and local paths, then start the CLI:
+The binary reads process environment variables; it does not automatically load `.env`. In PowerShell:
 
 ```powershell
 $env:TOTP_ENCRYPTION_KEY_BASE64 = '<base64-encoded-32-byte-key>'
@@ -82,74 +56,122 @@ $env:HISTORY_PATH = 'data/.auth-cli-history'
 go run ./cmd/cli
 ```
 
-Start with `register`, then use `login`. Successful authentication shows the username, registration date, MFA status, absolute session expiry, and previous login time without displaying the session token.
+## Typical command flow
 
-To enroll an authenticated account in TOTP:
+```text
+register
+login
+enable-2fa
+whoami
+logout
+login          # now asks for password and authenticator code
+disable-2fa    # asks for current password and authenticator code
+logout
+exit
+```
 
-1. Run `enable-2fa`.
+Logged-out commands are `register`, `login`, `help`, and `exit`.
+
+Logged-in commands are `whoami`, `enable-2fa`, `disable-2fa`, `logout`, `help`, and `exit`.
+
+Commands accept no arguments. Passwords and TOTP codes are collected through hidden prompts. Press Enter at an optional confirmation prompt or Ctrl+C to cancel the current interaction.
+
+### Enabling 2FA
+
+1. Log in and run `enable-2fa`.
 2. Scan the terminal QR code or import the displayed provisioning URI.
-3. Enter the current authenticator code at the hidden prompt.
-4. Retry an invalid code, or press Enter/Ctrl+C to cancel.
+3. Enter the current authenticator code to confirm enrollment.
 
-The provisioning URI contains the TOTP secret and is displayed intentionally. It is never written to command history or application logs. Subsequent logins first verify the password and then prompt for a current authenticator code. The password step creates only an opaque, five-minute in-memory challenge; no session exists until the code succeeds.
+The provisioning URI contains the TOTP secret and is intentionally displayed once during setup. It is not written to command history or application logs.
 
-To disable TOTP, run `disable-2fa` while logged in and enter the current password and authenticator code at the hidden prompts. Failed disable reauthentication does not affect login-lockout counters, and a successful disable leaves the current session valid.
+### Disabling 2FA
 
-Commands available while logged out:
+Run `disable-2fa` while logged in. The command requires the current password and TOTP code. Reauthentication failures do not change login-lockout counters, and disabling 2FA does not revoke the current session.
 
-- `register`
-- `login`
-- `help`
-- `exit`
+## Configuration
 
-Commands available while logged in:
+Non-sensitive values use the defaults shown in `.env.example`:
 
-- `whoami` - validate the current database session and display account details
-- `enable-2fa` - start and confirm TOTP enrollment
-- `disable-2fa` - disable TOTP after password and code reauthentication
-- `logout` - revoke the current session and clear local authentication state
-- `help`
-- `exit`
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_PATH` | `/app/data/auth.db` | SQLite database path |
+| `HISTORY_PATH` | `/app/data/.auth-cli-history` | recognized-command history path |
+| `MIN_USERNAME_LENGTH` / `MAX_USERNAME_LENGTH` | `3` / `50` | username limits |
+| `MIN_PASSWORD_LENGTH` / `MAX_PASSWORD_LENGTH` | `8` / `72` | bcrypt-safe password byte limits |
+| `BCRYPT_COST` | `12` | bcrypt work factor |
+| `MAX_LOGIN_ATTEMPTS` | `5` | shared password/TOTP failure threshold |
+| `ACCOUNT_LOCKOUT_DURATION` | `15m` | temporary lock duration |
+| `SESSION_TIMEOUT` | `30m` | absolute session lifetime |
+| `TOTP_ISSUER` | `InternshipAuthCLI` | authenticator display name |
+| `TOTP_PERIOD` / `TOTP_SKEW` | `30` / `1` | code period and accepted adjacent windows |
+| `TOTP_DIGITS` | `6` | supported values are 6 or 8 |
+| `TOTP_SETUP_TIMEOUT` | `10m` | pending enrollment lifetime |
+| `TOTP_CHALLENGE_TIMEOUT` | `5m` | password-first login challenge lifetime |
 
-Commands accept no arguments. Passwords and TOTP codes are collected through hidden prompts.
+`TOTP_ENCRYPTION_KEY_BASE64` is required and has no default. It must decode to exactly 32 bytes.
 
-## Validation
+## Architecture
+
+```text
+Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
+```
+
+- Handlers own prompts, messages, command authorization, and in-memory CLI state.
+- Services own validation, authentication rules, lockout, TOTP workflows, and session lifecycle.
+- Repositories own SQL, timestamp parsing, and persistence error translation.
+
+Dependencies such as the clock, password verification, token generation, TOTP validation, encryption, and repositories are passed into services so important behavior can be tested deterministically.
+
+Successful authentication uses a unit of work: session insertion, failure-counter reset, lock clearing, and `last_login_at` update either commit together or roll back together.
+
+## Security decisions
+
+- Usernames are trimmed, lowercased, validated, and protected by a unique index.
+- Passwords are never trimmed and are limited to 8-72 UTF-8 bytes before bcrypt hashing.
+- Unknown users still trigger a dummy bcrypt comparison and receive the same error as a wrong password.
+- Wrong passwords and wrong login TOTP codes share one persistent failure counter.
+- TOTP secrets are encrypted with AES-256-GCM using a fresh nonce for each encryption.
+- TOTP login challenges are opaque, process-local, single-use on success, and contain only a user ID and expiry.
+- Raw session tokens remain in process memory and are never printed or stored in SQLite.
+- Protected commands validate the database session each time; expiry is absolute rather than sliding.
+- SQLite enables foreign keys, a five-second busy timeout, one open connection, and WAL mode for file databases.
+- Pending enrollment and login challenges are cleared on success, cancellation, expiry, or shutdown.
+
+## Persistence and reset warning
+
+Docker Compose stores the database and history in the `auth_data` named volume. This survives container replacement.
+
+Stop containers without deleting data:
 
 ```bash
-gofmt -w ./cmd ./internal ./migrations
+docker compose down
+```
+
+Permanently delete all accounts, sessions, 2FA enrollment, and command history:
+
+```bash
+docker compose down -v
+```
+
+That reset cannot be undone unless the volume was backed up. Changing or losing the encryption key makes existing encrypted TOTP secrets unusable.
+
+## Validation and tests
+
+```bash
 go test ./...
 go vet ./...
 go build ./cmd/cli
 docker build -t auth-cli:local .
 ```
 
-## Architecture
+Repository unit tests use `sqlmock`; they do not open SQLite. Migration and service integration tests use isolated temporary SQLite files to verify schema constraints and transaction behavior. GitHub Actions runs tests, vet, the Go build, and the Docker build on pushes and pull requests.
 
-The application follows this dependency direction:
+## Assumptions and limitations
 
-```text
-Interactive CLI -> Handlers -> Services -> Repository interfaces -> SQLite
-```
-
-Authentication services own validation, lockout, TOTP enrollment, opaque login challenges, disable reauthentication, and login orchestration. A clock-injected TOTP service owns provisioning and code validation. AES-GCM is isolated behind an encryption dependency. The session service uses a unit of work so updating login state and inserting a session commit or roll back together. Repositories own SQL and timestamp parsing; handlers own prompts, QR output, messages, command authorization, and in-memory CLI state.
-
-## Security notes
-
-- TOTP secrets are persisted only after a correct enrollment confirmation code.
-- Stored TOTP secrets use AES-256-GCM with a fresh nonce and Base64 `nonce || ciphertext` encoding.
-- Pending plaintext enrollment secrets exist only in process memory and expire after ten minutes by default.
-- TOTP login challenges contain only a user ID and expiry, are opaque to handlers, are single-use on success, and expire after five minutes by default.
-- Passwords and TOTP codes are read without terminal echo.
-- Passwords are hashed with bcrypt before persistence.
-- Unknown usernames and wrong passwords produce the same credential error; unknown-user attempts still perform bcrypt work.
-- Wrong passwords and wrong login TOTP codes share one persistent failure counter and lock threshold.
-- Login failures reset only after all required factors succeed and the session transaction commits.
-- Disable-flow reauthentication failures do not modify login-lockout counters.
-- Raw session tokens are never printed or stored in SQLite. Only lowercase SHA-256 hashes are persisted.
-- Session expiry is absolute, and protected commands query SQLite every time.
-- Enabling or disabling 2FA does not revoke existing sessions.
-- Usernames are normalized and protected by a unique database index.
-- Secrets are supplied through environment variables and are never committed.
-- Command history is saved manually and contains recognized command names only.
-- The container runs as an unprivileged user.
-- SQLite databases, history, binaries, and local environment files are ignored by Git and Docker build context.
+- The application is designed for one interactive process using one SQLite database.
+- Pending TOTP setup and login challenges do not survive a restart.
+- Existing sessions remain valid when 2FA is enabled or disabled.
+- Recovery codes, password changes, account recovery, and encryption-key rotation are out of scope.
+- Losing the TOTP device or encryption key requires resetting the disposable project data; there is no recovery workflow.
+- There is no HTTP API, multi-user server, distributed session coordination, or horizontal scaling.
+- Command history stores recognized command names only, not usernames, passwords, TOTP codes, or provisioning URIs.
