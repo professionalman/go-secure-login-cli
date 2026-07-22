@@ -1,5 +1,7 @@
 package shared
 
+//go:generate go tool mockgen -source=interfaces.go -destination=mocks/mock_shared.go -package=mocks
+
 type ISessionState interface {
 	IsAuthenticated() bool
 	SessionToken() string

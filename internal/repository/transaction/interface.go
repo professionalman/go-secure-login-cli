@@ -1,5 +1,7 @@
 package transaction
 
+//go:generate go tool mockgen -source=interface.go -destination=mocks/mock_transaction.go -package=mocks
+
 import (
 	"context"
 

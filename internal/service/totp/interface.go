@@ -1,5 +1,7 @@
 package totp
 
+//go:generate go tool mockgen -source=interface.go -destination=mocks/mock_totp.go -package=mocks
+
 import (
 	"context"
 

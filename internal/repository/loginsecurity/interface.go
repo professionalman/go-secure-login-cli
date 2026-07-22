@@ -1,5 +1,8 @@
 package loginsecurity
 
+//go:generate go tool mockgen -source=interface.go -destination=mocks/mock_loginsecurity.go -package=mocks
+//go:generate go tool mockgen -source=redis.go -destination=mocks/mock_redis_client.go -package=mocks
+
 import (
 	"context"
 	"time"

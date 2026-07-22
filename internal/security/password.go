@@ -1,5 +1,7 @@
 package security
 
+//go:generate go tool mockgen -source=password.go -destination=mocks/mock_password.go -package=mocks
+
 import (
 	"fmt"
 

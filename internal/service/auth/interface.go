@@ -1,5 +1,7 @@
 package auth
 
+//go:generate go tool mockgen -source=interface.go -destination=mocks/mock_auth.go -package=mocks
+
 import (
 	"context"
 

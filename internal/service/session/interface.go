@@ -1,5 +1,7 @@
 package session
 
+//go:generate go tool mockgen -source=interface.go -destination=mocks/mock_session.go -package=mocks
+
 import (
 	"context"
 
