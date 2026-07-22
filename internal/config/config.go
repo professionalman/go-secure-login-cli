@@ -12,7 +12,8 @@ import (
 
 const (
 	defaultAppEnvironment          = "development"
-	defaultDatabasePath            = "data/auth.db"
+	defaultDatabaseURL             = "postgres://auth_cli:auth_cli@localhost:5432/auth_cli?sslmode=disable"
+	defaultRedisURL                = "redis://localhost:6379/0"
 	defaultHistoryPath             = "data/.auth-cli-history"
 	defaultMinimumUsernameLength   = 3
 	defaultMaximumUsernameLength   = 50
@@ -36,7 +37,8 @@ const (
 // Config is the validated runtime configuration for the application.
 type Config struct {
 	AppEnvironment         string
-	DatabasePath           string
+	DatabaseURL            string
+	RedisURL               string
 	HistoryPath            string
 	MinimumUsernameLength  int
 	MaximumUsernameLength  int
@@ -62,7 +64,8 @@ func Load() (Config, error) {
 	var err error
 
 	cfg.AppEnvironment = valueOrDefault("APP_ENV", defaultAppEnvironment)
-	cfg.DatabasePath = valueOrDefault("DATABASE_PATH", defaultDatabasePath)
+	cfg.DatabaseURL = valueOrDefault("DATABASE_URL", defaultDatabaseURL)
+	cfg.RedisURL = valueOrDefault("REDIS_URL", defaultRedisURL)
 	cfg.HistoryPath = valueOrDefault("HISTORY_PATH", defaultHistoryPath)
 	cfg.TOTPIssuer = valueOrDefault("TOTP_ISSUER", defaultTOTPIssuer)
 
@@ -123,8 +126,11 @@ func validateRanges(cfg Config) error {
 	if strings.TrimSpace(cfg.AppEnvironment) == "" {
 		return errors.New("APP_ENV must not be empty")
 	}
-	if strings.TrimSpace(cfg.DatabasePath) == "" {
-		return errors.New("DATABASE_PATH must not be empty")
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return errors.New("DATABASE_URL must not be empty")
+	}
+	if strings.TrimSpace(cfg.RedisURL) == "" {
+		return errors.New("REDIS_URL must not be empty")
 	}
 	if strings.TrimSpace(cfg.HistoryPath) == "" {
 		return errors.New("HISTORY_PATH must not be empty")

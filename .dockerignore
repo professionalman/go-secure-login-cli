@@ -1,6 +1,8 @@
 .git
 .gitignore
 .env
+.env.docker
+.env.local
 data/*
 !data/.gitkeep
 bin/

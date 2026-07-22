@@ -18,15 +18,20 @@ func VerifyPassword(passwordHash, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 }
 
-// BcryptPasswordHasher adapts the password utility to service boundaries.
-type BcryptPasswordHasher struct {
+type IPasswordManager interface {
+	Hash(password string) (string, error)
+	Verify(passwordHash, password string) error
+}
+
+// BcryptPasswordManager provides hashing and verification through one contract.
+type BcryptPasswordManager struct {
 	Cost int
 }
 
-func (h BcryptPasswordHasher) Hash(password string) (string, error) {
+func (h BcryptPasswordManager) Hash(password string) (string, error) {
 	return HashPassword(password, h.Cost)
 }
 
-func (h BcryptPasswordHasher) Verify(passwordHash, password string) error {
+func (h BcryptPasswordManager) Verify(passwordHash, password string) error {
 	return VerifyPassword(passwordHash, password)
 }

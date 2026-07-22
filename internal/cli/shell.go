@@ -8,69 +8,65 @@ import (
 	"slices"
 	"strings"
 
-	"auth-cli/internal/handler"
-	"auth-cli/internal/service"
+	authhandler "auth-cli/internal/handler/auth"
+	sessionhandler "auth-cli/internal/handler/session"
+	"auth-cli/internal/handler/shared"
+	totphandler "auth-cli/internal/handler/totp"
+	authservice "auth-cli/internal/service/auth"
+	sessionservice "auth-cli/internal/service/session"
+	totpservice "auth-cli/internal/service/totp"
 
 	"github.com/chzyer/readline"
 )
 
-// Shell is the long-running interactive command loop.
 type Shell struct {
-	line         *readline.Instance
-	state        *State
-	out          io.Writer
-	register     *handler.RegisterHandler
-	login        *handler.LoginHandler
-	whoami       *handler.WhoAmIHandler
-	logout       *handler.LogoutHandler
-	enableTOTP   *handler.EnableTOTPHandler
-	disableTOTP  *handler.DisableTOTPHandler
-	loginService service.LoginService
-	enrollment   service.TOTPEnrollmentService
+	line              *readline.Instance
+	state             *EnvironmentSessionState
+	out               io.Writer
+	auth              *authhandler.Handler
+	sessions          *sessionhandler.Handler
+	totp              *totphandler.Handler
+	authSvc           authservice.IAuthService
+	totpSvc           totpservice.ITOTPService
+	registrationRules authservice.RegistrationPolicy
 }
 
 func NewShell(
 	historyPath string,
 	output io.Writer,
-	auth service.AuthService,
-	login service.LoginService,
-	sessions service.SessionService,
-	enrollment service.TOTPEnrollmentService,
-	disable service.TOTPDisableService,
+	auth authservice.IAuthService,
+	sessions sessionservice.ISessionService,
+	totp totpservice.ITOTPService,
+	registrationRules authservice.RegistrationPolicy,
 ) (*Shell, error) {
 	if err := prepareHistory(historyPath); err != nil {
 		return nil, err
 	}
-	state := &State{}
+	state := NewEnvironmentSessionState()
 	line, err := readline.NewEx(&readline.Config{
-		Prompt:                 shellPrompt,
-		HistoryFile:            historyPath,
-		HistorySearchFold:      true,
-		DisableAutoSaveHistory: true,
-		AutoComplete:           NewCompleter(state),
-		InterruptPrompt:        "^C",
-		EOFPrompt:              "exit",
-		Stdout:                 output,
-		Stderr:                 output,
+		Prompt: shellPrompt, HistoryFile: historyPath, HistorySearchFold: true,
+		DisableAutoSaveHistory: true, AutoComplete: NewCompleter(state),
+		InterruptPrompt: "^C", EOFPrompt: "exit", Stdout: output, Stderr: output,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize interactive shell: %w", err)
 	}
 	terminal := terminal{line: line, out: output}
 	return &Shell{
-		line: line, state: state, out: output, loginService: login, enrollment: enrollment,
-		register:    handler.NewRegisterHandler(auth, terminal),
-		login:       handler.NewLoginHandler(login, state, terminal),
-		whoami:      handler.NewWhoAmIHandler(sessions, state, terminal),
-		logout:      handler.NewLogoutHandler(sessions, state, terminal),
-		enableTOTP:  handler.NewEnableTOTPHandler(enrollment, state, terminal, handler.TerminalQRRenderer{Writer: output}),
-		disableTOTP: handler.NewDisableTOTPHandler(disable, state, terminal),
+		line: line, state: state, out: output, authSvc: auth, totpSvc: totp,
+		registrationRules: registrationRules,
+		auth:              authhandler.NewHandler(auth, state, terminal),
+		sessions:          sessionhandler.NewHandler(sessions, state, terminal),
+		totp: totphandler.NewHandler(
+			totp, state, terminal, shared.TerminalQRRenderer{Writer: output},
+		),
 	}, nil
 }
 
 func (s *Shell) Close() error {
-	s.enrollment.ClearPendingTOTPSetups()
-	s.loginService.ClearTOTPLoginChallenges()
+	s.state.ClearSession()
+	s.totpSvc.ClearPendingSetups()
+	s.authSvc.ClearTOTPLoginChallenges()
 	return s.line.Close()
 }
 
@@ -92,7 +88,6 @@ func (s *Shell) Run(ctx context.Context) error {
 			return nil
 		default:
 		}
-
 		raw, err := s.line.Readline()
 		if ctx.Err() != nil {
 			return nil
@@ -106,7 +101,6 @@ func (s *Shell) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read command: %w", err)
 		}
-
 		fields := strings.Fields(raw)
 		if len(fields) == 0 {
 			continue
@@ -115,7 +109,6 @@ func (s *Shell) Run(ctx context.Context) error {
 			fmt.Fprintln(s.out, "Commands do not accept arguments. Run `help` to see available commands.")
 			continue
 		}
-
 		command := strings.ToLower(fields[0])
 		if !recognizedCommand(command) {
 			fmt.Fprintln(s.out, "Unknown command. Run `help` to see available commands.")
@@ -132,14 +125,13 @@ func (s *Shell) Run(ctx context.Context) error {
 			}
 			continue
 		}
-
 		switch command {
 		case "help":
 			s.printHelp()
 		case "exit":
 			return nil
 		case "register":
-			if err := s.register.Handle(ctx); err != nil {
+			if err := s.auth.Register(ctx); err != nil {
 				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
 					fmt.Fprintln(s.out, "Registration cancelled.")
 					continue
@@ -147,7 +139,7 @@ func (s *Shell) Run(ctx context.Context) error {
 				return fmt.Errorf("register command: %w", err)
 			}
 		case "login":
-			if err := s.login.Handle(ctx); err != nil {
+			if err := s.auth.Login(ctx); err != nil {
 				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
 					fmt.Fprintln(s.out, "Login cancelled.")
 					continue
@@ -155,11 +147,11 @@ func (s *Shell) Run(ctx context.Context) error {
 				return fmt.Errorf("login command: %w", err)
 			}
 		case "whoami":
-			s.whoami.Handle(ctx)
+			s.sessions.WhoAmI(ctx)
 		case "logout":
-			s.logout.Handle(ctx)
+			s.sessions.Logout(ctx)
 		case "enable-2fa":
-			if err := s.enableTOTP.Handle(ctx); err != nil {
+			if err := s.totp.Enable(ctx); err != nil {
 				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
 					fmt.Fprintln(s.out, "Two-factor setup cancelled.")
 					continue
@@ -167,7 +159,7 @@ func (s *Shell) Run(ctx context.Context) error {
 				return fmt.Errorf("enable-2fa command: %w", err)
 			}
 		case "disable-2fa":
-			if err := s.disableTOTP.Handle(ctx); err != nil {
+			if err := s.totp.Disable(ctx); err != nil {
 				if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
 					fmt.Fprintln(s.out, "Disable two-factor authentication cancelled.")
 					continue
@@ -187,6 +179,13 @@ func (s *Shell) printHelp() {
 	for _, command := range AvailableCommands(s.state) {
 		fmt.Fprintf(s.out, "  %-12s %s\n", command, commandDescription(command))
 	}
+	if !s.state.IsAuthenticated() {
+		fmt.Fprintln(s.out, "Registration rules:")
+		fmt.Fprintf(s.out, "  Username: %d-%d characters; letters, numbers, dots, underscores, or hyphens.\n",
+			s.registrationRules.MinimumUsernameLength, s.registrationRules.MaximumUsernameLength)
+		fmt.Fprintf(s.out, "  Password: %d-%d UTF-8 bytes; spaces are preserved.\n",
+			s.registrationRules.MinimumPasswordLength, s.registrationRules.MaximumPasswordLength)
+	}
 }
 
 func commandDescription(command string) string {
@@ -202,7 +201,7 @@ func commandDescription(command string) string {
 	case "disable-2fa":
 		return "Disable TOTP two-factor authentication."
 	case "logout":
-		return "Revoke the current session."
+		return "Revoke the current terminal session."
 	case "help":
 		return "Show commands available in the current state."
 	case "exit":

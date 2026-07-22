@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"auth-cli/internal/handler/shared"
 )
 
 func prepareHistory(path string) error {
@@ -25,6 +27,6 @@ func prepareHistory(path string) error {
 	return nil
 }
 
-func knownCommand(state *State, command string) bool {
+func knownCommand(state shared.ISessionState, command string) bool {
 	return slices.Contains(AvailableCommands(state), command)
 }

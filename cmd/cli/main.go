@@ -6,14 +6,19 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	appcli "auth-cli/internal/cli"
-	"auth-cli/internal/clock"
 	"auth-cli/internal/config"
-	"auth-cli/internal/database"
-	sqliterepository "auth-cli/internal/repository/sqlite"
+	database "auth-cli/internal/database/postgres"
+	"auth-cli/internal/repository/loginsecurity"
+	sessionrepository "auth-cli/internal/repository/session"
+	"auth-cli/internal/repository/transaction"
+	userrepository "auth-cli/internal/repository/user"
 	"auth-cli/internal/security"
-	"auth-cli/internal/service"
+	authservice "auth-cli/internal/service/auth"
+	sessionservice "auth-cli/internal/service/session"
+	totpservice "auth-cli/internal/service/totp"
 
 	"github.com/google/uuid"
 )
@@ -28,73 +33,75 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	if err := config.LoadEnvFile(".env.local"); err != nil {
+		return fmt.Errorf("load local environment: %w", err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-
-	db, err := database.Open(ctx, cfg.DatabasePath)
+	db, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("database initialization failed: %w", err)
 	}
 	defer db.Close()
-
 	if err := database.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("database migration failed: %w", err)
 	}
+	redisClient, err := loginsecurity.Open(ctx, cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("login security initialization failed: %w", err)
+	}
+	defer redisClient.Close()
 
-	users := sqliterepository.NewUserRepository(db)
-	sessions := sqliterepository.NewSessionRepository(db)
-	unitOfWork := sqliterepository.NewUnitOfWork(db)
-	serviceClock := clock.System{}
-	if err := sessions.DeleteExpired(ctx, serviceClock.Now().UTC()); err != nil {
+	users := userrepository.NewPostgresRepository(db)
+	sessions := sessionrepository.NewPostgresRepository(db)
+	unitOfWork := transaction.NewPostgresUnitOfWork(db)
+	loginSecurity := loginsecurity.NewRedisRepository(redisClient)
+	if err := sessions.DeleteExpired(ctx, time.Now().UTC()); err != nil {
 		return fmt.Errorf("expired session cleanup failed: %w", err)
 	}
-	sessionService := service.NewSessionService(
-		users,
-		sessions,
-		unitOfWork,
-		serviceClock,
-		uuid.NewString,
-		security.GenerateSessionToken,
-		cfg.SessionTimeout,
+	passwords := security.BcryptPasswordManager{Cost: cfg.BcryptCost}
+	sessionService := sessionservice.NewService(
+		users, sessions, unitOfWork, uuid.NewString,
+		security.GenerateSessionToken, cfg.SessionTimeout,
 	)
-	totpCipher, err := security.NewAESGCMCipher(cfg.TOTPEncryptionKey)
+	cipher, err := security.NewAESGCMCipher(cfg.TOTPEncryptionKey)
 	if err != nil {
 		return fmt.Errorf("TOTP encryption initialization failed: %w", err)
 	}
-	totpService := service.NewTOTPService(serviceClock, service.TOTPPolicy{
-		Issuer: cfg.TOTPIssuer,
-		Period: uint(cfg.TOTPPeriod),
-		Skew:   uint(cfg.TOTPSkew),
-		Digits: cfg.TOTPDigits,
-	})
-	auth := service.NewAuthService(
-		users,
-		security.BcryptPasswordHasher{Cost: cfg.BcryptCost},
-		serviceClock,
-		uuid.NewString,
-		service.RegistrationPolicy{
-			MinimumUsernameLength: cfg.MinimumUsernameLength,
-			MaximumUsernameLength: cfg.MaximumUsernameLength,
-			MinimumPasswordLength: cfg.MinimumPasswordLength,
-			MaximumPasswordLength: cfg.MaximumPasswordLength,
+	totpService := totpservice.NewService(
+		users, sessionService, passwords, cipher,
+		totpservice.Policy{
+			Issuer: cfg.TOTPIssuer, Period: uint(cfg.TOTPPeriod),
+			Skew: uint(cfg.TOTPSkew), Digits: cfg.TOTPDigits,
 		},
-		service.WithSessionService(sessionService),
-		service.WithLoginSecurityPolicy(service.LoginSecurityPolicy{
+		cfg.TOTPSetupTimeout,
+	)
+	registrationPolicy := authservice.RegistrationPolicy{
+		MinimumUsernameLength: cfg.MinimumUsernameLength,
+		MaximumUsernameLength: cfg.MaximumUsernameLength,
+		MinimumPasswordLength: cfg.MinimumPasswordLength,
+		MaximumPasswordLength: cfg.MaximumPasswordLength,
+	}
+	authService := authservice.NewService(
+		users, passwords, sessionService, totpService, loginSecurity,
+		uuid.NewString, security.GenerateSessionToken,
+		registrationPolicy,
+		authservice.LoginSecurityPolicy{
 			MaximumAttempts: cfg.MaximumLoginAttempts,
 			LockoutDuration: cfg.AccountLockoutDuration,
-		}),
-		service.WithTOTPEnrollment(totpService, totpCipher, cfg.TOTPSetupTimeout),
-		service.WithTOTPLogin(totpService, totpCipher, cfg.TOTPChallengeTimeout, security.GenerateSessionToken),
+		},
+		cfg.TOTPChallengeTimeout,
 	)
-
-	shell, err := appcli.NewShell(cfg.HistoryPath, os.Stdout, auth, auth, sessionService, auth, auth)
+	shell, err := appcli.NewShell(
+		cfg.HistoryPath, os.Stdout, authService, sessionService, totpService,
+		registrationPolicy,
+	)
 	if err != nil {
 		return fmt.Errorf("CLI initialization failed: %w", err)
 	}
 	defer shell.Close()
-
 	if err := shell.Run(ctx); err != nil {
 		return fmt.Errorf("CLI stopped unexpectedly: %w", err)
 	}

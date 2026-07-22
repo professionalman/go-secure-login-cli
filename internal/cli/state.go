@@ -1,34 +1,40 @@
 package cli
 
-import "sync"
+import (
+	"os"
+	"sync"
+)
 
-// State stores authentication material that is allowed to exist only in the
-// running CLI process.
-type State struct {
-	mu              sync.RWMutex
-	rawSessionToken string
+const SessionTokenEnvironmentVariable = "AUTH_CLI_SESSION_TOKEN"
+
+type EnvironmentSessionState struct {
+	mu sync.RWMutex
 }
 
-func (s *State) IsAuthenticated() bool {
+func NewEnvironmentSessionState() *EnvironmentSessionState {
+	state := &EnvironmentSessionState{}
+	state.ClearSession()
+	return state
+}
+
+func (s *EnvironmentSessionState) IsAuthenticated() bool {
+	return s.SessionToken() != ""
+}
+
+func (s *EnvironmentSessionState) SessionToken() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.rawSessionToken != ""
+	return os.Getenv(SessionTokenEnvironmentVariable)
 }
 
-func (s *State) SessionToken() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.rawSessionToken
-}
-
-func (s *State) SetSession(rawToken string) {
+func (s *EnvironmentSessionState) SetSession(rawToken string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rawSessionToken = rawToken
+	_ = os.Setenv(SessionTokenEnvironmentVariable, rawToken)
 }
 
-func (s *State) ClearSession() {
+func (s *EnvironmentSessionState) ClearSession() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rawSessionToken = ""
+	_ = os.Unsetenv(SessionTokenEnvironmentVariable)
 }

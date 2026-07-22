@@ -10,8 +10,6 @@ type User struct {
 	PasswordHash        string
 	TOTPEnabled         bool
 	TOTPSecretEncrypted *string
-	FailedLoginAttempts int
-	LockedUntil         *time.Time
 	RegisteredAt        time.Time
 	LastLoginAt         *time.Time
 	CreatedAt           time.Time
